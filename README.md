@@ -14,7 +14,7 @@ removes bloatware from android phones without root
 basically uninstalls system apps without needing root access. uses adb under the hood.
 
 ## requirements
-
+ 
 - adb (android debug bridge)
   - the tool will offer to install it for you if its missing
   - works with apt, pacman, dnf, nix, homebrew, winget, chocolatey
