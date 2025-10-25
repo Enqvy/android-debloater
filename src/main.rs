@@ -6,6 +6,8 @@ use std::io::{self, Write};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
+use std::path::PathBuf;
+use std::env;
 
 #[derive(Clone, Debug, PartialEq)]
 enum ConnectionType {
@@ -88,7 +90,6 @@ fn main() {
         
         if confirm_action("Would you like to install ADB now?") {
             install_adb();
-            // check again after install
             if !check_adb() {
                 eprintln!("{}", "ADB installation failed or not in PATH. Please install manually.".red());
                 eprintln!("Download from: https://developer.android.com/tools/releases/platform-tools");
@@ -120,7 +121,9 @@ fn main() {
                 8 => list_connected_devices(),
                 9 => create_backup(&state),
                 10 => show_device_info(&mut state),
-                11 => {
+                11 => list_backups(),
+                12 => restore_from_backup(&mut state),
+                13 => {
                     println!("{}", "Exiting... Goodbye!".yellow());
                     break;
                 }
@@ -183,7 +186,9 @@ fn display_main_menu(state: &AppState) {
     println!("{}", "  8. Show connected devices               ".cyan());
     println!("{}", "  9. Create backup                        ".cyan());
     println!("{}", " 10. Show device info                     ".cyan());
-    println!("{}", " 11. Exit                                 ".cyan());
+    println!("{}", " 11. List all backups                     ".cyan());
+    println!("{}", " 12. Restore from backup                  ".cyan());
+    println!("{}", " 13. Exit                                 ".cyan());
     println!("{}", "===========================================".cyan());
 }
 
@@ -235,7 +240,6 @@ fn check_adb() -> bool {
         .unwrap_or(false)
 }
 
-// try to install adb based on os
 fn install_adb() {
     println!("{}", "Detecting your system...".yellow());
     
@@ -252,10 +256,8 @@ fn install_adb() {
 }
 
 fn install_adb_linux() {
-    // try to detect which package manager to use
     println!("{}", "Detecting package manager...".yellow());
     
-    // check for nix first
     if Command::new("nix-env").arg("--version").output().is_ok() {
         println!("{}", "Detected Nix package manager".green());
         if confirm_action("Install ADB using nix-env?") {
@@ -272,7 +274,6 @@ fn install_adb_linux() {
         return;
     }
     
-    // check for pacman (arch)
     if Command::new("pacman").arg("--version").output().is_ok() {
         println!("{}", "Detected pacman (Arch Linux)".green());
         if confirm_action("Install ADB using pacman?") {
@@ -290,7 +291,6 @@ fn install_adb_linux() {
         return;
     }
     
-    // check for apt (debian/ubuntu)
     if Command::new("apt").arg("--version").output().is_ok() {
         println!("{}", "Detected APT (Debian/Ubuntu)".green());
         if confirm_action("Install ADB using apt?") {
@@ -314,7 +314,6 @@ fn install_adb_linux() {
         return;
     }
     
-    // check for dnf (fedora)
     if Command::new("dnf").arg("--version").output().is_ok() {
         println!("{}", "Detected DNF (Fedora)".green());
         if confirm_action("Install ADB using dnf?") {
@@ -332,7 +331,6 @@ fn install_adb_linux() {
         return;
     }
     
-    // check for zypper (opensuse)
     if Command::new("zypper").arg("--version").output().is_ok() {
         println!("{}", "Detected Zypper (openSUSE)".green());
         if confirm_action("Install ADB using zypper?") {
@@ -357,7 +355,6 @@ fn install_adb_linux() {
 fn install_adb_windows() {
     println!("{}", "Detected Windows".green());
     
-    // try winget first
     if Command::new("winget").arg("--version").output().is_ok() {
         println!("{}", "Found winget package manager".green());
         if confirm_action("Install ADB using winget?") {
@@ -377,7 +374,6 @@ fn install_adb_windows() {
         }
     }
     
-    // try chocolatey
     if Command::new("choco").arg("--version").output().is_ok() {
         println!("{}", "Found Chocolatey package manager".green());
         if confirm_action("Install ADB using Chocolatey?") {
@@ -406,7 +402,6 @@ fn install_adb_windows() {
 fn install_adb_macos() {
     println!("{}", "Detected macOS".green());
     
-    // check for homebrew
     if Command::new("brew").arg("--version").output().is_ok() {
         println!("{}", "Found Homebrew".green());
         if confirm_action("Install ADB using Homebrew?") {
@@ -467,6 +462,253 @@ fn execute_adb_command(args: &[&str]) -> Result<String, String> {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
         Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+// get temp dir for backups
+fn get_temp_backup_dir() -> PathBuf {
+    env::temp_dir().join("android_debloater_backups")
+}
+
+fn get_temp_backup_path() -> PathBuf {
+    let backup_dir = get_temp_backup_dir();
+    fs::create_dir_all(&backup_dir).ok();
+    
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    backup_dir.join(format!("backup_{}.json", timestamp))
+}
+
+fn show_temp_location() {
+    let temp_dir = get_temp_backup_dir();
+    println!("{} {}", "Backup location:".cyan(), temp_dir.display().to_string().bright_white());
+}
+
+// auto backup before removal
+fn create_backup_auto(packages: &[String]) -> Result<String, String> {
+    let backup_path = get_temp_backup_path();
+    
+    let backup = Backup {
+        timestamp: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        packages: packages.to_vec(),
+    };
+    
+    match serde_json::to_string_pretty(&backup) {
+        Ok(json) => {
+            if let Err(e) = fs::write(&backup_path, json) {
+                Err(format!("Failed to create backup: {}", e))
+            } else {
+                Ok(backup_path.to_string_lossy().to_string())
+            }
+        }
+        Err(e) => Err(format!("Failed to serialize backup: {}", e))
+    }
+}
+
+fn list_backups() {
+    println!();
+    println!("{}", "=========================================".cyan());
+    println!("{}", "  Available Backups".cyan().bold());
+    println!("{}", "=========================================".cyan());
+    
+    let backup_dir = get_temp_backup_dir();
+    
+    if !backup_dir.exists() {
+        println!("{}", "No backups found".yellow());
+        println!("{} {}", "Backup directory:".cyan(), backup_dir.display());
+        return;
+    }
+    
+    match fs::read_dir(&backup_dir) {
+        Ok(entries) => {
+            let mut backups: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path().extension()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s == "json")
+                        .unwrap_or(false)
+                })
+                .collect();
+            
+            if backups.is_empty() {
+                println!("{}", "No backups found".yellow());
+                return;
+            }
+            
+            backups.sort_by_key(|e| e.path());
+            backups.reverse();
+            
+            for (i, entry) in backups.iter().enumerate() {
+                let path = entry.path();
+                let filename = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+                
+                // try read the backup to show package count
+                if let Ok(content) = fs::read_to_string(&path) {
+                    if let Ok(backup) = serde_json::from_str::<Backup>(&content) {
+                        println!("{} {} - {} ({} packages)", 
+                            format!("[{}]", i + 1).bright_black(),
+                            filename.bright_white(),
+                            backup.timestamp.cyan(),
+                            backup.packages.len()
+                        );
+                        continue;
+                    }
+                }
+                
+                println!("{} {}", 
+                    format!("[{}]", i + 1).bright_black(),
+                    filename.bright_white()
+                );
+            }
+            
+            println!("{}", "=========================================".cyan());
+            println!("{} {}", "Total backups:".cyan(), backups.len().to_string().bright_white());
+            show_temp_location();
+        }
+        Err(e) => {
+            println!("{} {}", "Error reading backup directory:".red(), e);
+        }
+    }
+}
+
+fn restore_from_backup(state: &mut AppState) {
+    if !check_device_connected(state) {
+        println!("{}", "Error: No device connected!".red());
+        return;
+    }
+    
+    let backup_dir = get_temp_backup_dir();
+    
+    if !backup_dir.exists() {
+        println!("{}", "No backups found".yellow());
+        return;
+    }
+    
+    match fs::read_dir(&backup_dir) {
+        Ok(entries) => {
+            let mut backups: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path().extension()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s == "json")
+                        .unwrap_or(false)
+                })
+                .collect();
+            
+            if backups.is_empty() {
+                println!("{}", "No backups found".yellow());
+                return;
+            }
+            
+            backups.sort_by_key(|e| e.path());
+            backups.reverse();
+            
+            println!();
+            println!("{}", "Available backups:".cyan().bold());
+            println!();
+            
+            for (i, entry) in backups.iter().enumerate() {
+                let path = entry.path();
+                let filename = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+                
+                if let Ok(content) = fs::read_to_string(&path) {
+                    if let Ok(backup) = serde_json::from_str::<Backup>(&content) {
+                        println!("{} {} - {} ({} packages)", 
+                            format!("[{}]", i + 1).bright_black(),
+                            filename.bright_white(),
+                            backup.timestamp.cyan(),
+                            backup.packages.len()
+                        );
+                        continue;
+                    }
+                }
+                
+                println!("{} {}", 
+                    format!("[{}]", i + 1).bright_black(),
+                    filename.bright_white()
+                );
+            }
+            
+            println!();
+            let choice = get_user_input("Enter backup number to restore (or 0 to cancel): ");
+            
+            let index: usize = match choice.parse() {
+                Ok(n) if n > 0 && n <= backups.len() => n - 1,
+                Ok(0) => {
+                    println!("{}", "Cancelled".yellow());
+                    return;
+                }
+                _ => {
+                    println!("{}", "Invalid choice".red());
+                    return;
+                }
+            };
+            
+            let backup_path = backups[index].path();
+            
+            match fs::read_to_string(&backup_path) {
+                Ok(content) => {
+                    match serde_json::from_str::<Backup>(&content) {
+                        Ok(backup) => {
+                            println!();
+                            println!("{} {}", "Backup timestamp:".cyan(), backup.timestamp);
+                            println!("{} {}", "Packages to restore:".cyan(), backup.packages.len());
+                            println!();
+                            
+                            if !confirm_action("Restore these packages?") {
+                                println!("{}", "Cancelled".yellow());
+                                return;
+                            }
+                            
+                            println!();
+                            let mut restored = 0;
+                            let mut failed = 0;
+                            
+                            for package in &backup.packages {
+                                print!("{} {}...", "Restoring".yellow(), package.bright_white());
+                                io::stdout().flush().ok();
+                                
+                                let result = Command::new("adb")
+                                    .args(&["shell", "cmd", "package", "install-existing", package])
+                                    .output();
+                                
+                                match result {
+                                    Ok(output) if output.status.success() => {
+                                        println!(" {}", "OK".green());
+                                        restored += 1;
+                                    }
+                                    _ => {
+                                        println!(" {}", "FAILED".red());
+                                        failed += 1;
+                                    }
+                                }
+                            }
+                            
+                            println!();
+                            println!("{}", "Restore completed!".green().bold());
+                            println!("{} {}", "Restored:".green(), restored);
+                            if failed > 0 {
+                                println!("{} {}", "Failed:".red(), failed);
+                            }
+                        }
+                        Err(e) => {
+                            println!("{} {}", "Error parsing backup file:".red(), e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("{} {}", "Error reading backup file:".red(), e);
+                }
+            }
+        }
+        Err(e) => {
+            println!("{} {}", "Error reading backup directory:".red(), e);
+        }
     }
 }
 
@@ -953,11 +1195,28 @@ fn interactive_mode(state: &mut AppState) {
                     }
 
                     if confirm_action(&format!("Remove {} packages?", selected.len())) {
+                        // create backup before removing
+                        println!("{}", "Creating backup before removal...".yellow());
+                        let package_names: Vec<String> = selected.iter().map(|p| p.name.clone()).collect();
+                        
+                        match create_backup_auto(&package_names) {
+                            Ok(backup_path) => {
+                                println!("{} {}", "Backup saved:".green(), backup_path.bright_white());
+                            }
+                            Err(e) => {
+                                println!("{} {}", "Backup failed:".red(), e);
+                                if !confirm_action("Continue without backup?") {
+                                    continue;
+                                }
+                            }
+                        }
+                        
                         println!();
                         for package in selected {
                             remove_package(&package.name);
                         }
                         println!("{}", "\nOperation completed!".green().bold());
+                        show_temp_location();
                         thread::sleep(Duration::from_secs(2));
                     }
                 } else if choice == count + 5 {
@@ -990,7 +1249,22 @@ fn remove_single_package(state: &mut AppState) {
         }
     }
 
+    // auto backup
+    println!("{}", "Creating backup...".yellow());
+    match create_backup_auto(&vec![package_name.clone()]) {
+        Ok(backup_path) => {
+            println!("{} {}", "Backup saved:".green(), backup_path.bright_white());
+        }
+        Err(e) => {
+            println!("{} {}", "Backup failed:".red(), e);
+            if !confirm_action("Continue without backup?") {
+                return;
+            }
+        }
+    }
+
     remove_package(&package_name);
+    show_temp_location();
 }
 
 fn remove_package(package_name: &str) {
@@ -1111,20 +1385,20 @@ fn create_backup(state: &AppState) {
         return;
     }
 
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let filename = format!("backup_{}.json", timestamp);
+    let backup_path = get_temp_backup_path();
 
     let backup = Backup {
-        timestamp: timestamp.clone(),
+        timestamp: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         packages: state.packages.iter().map(|p| p.name.clone()).collect(),
     };
 
     match serde_json::to_string_pretty(&backup) {
         Ok(json) => {
-            if let Err(e) = fs::write(&filename, json) {
+            if let Err(e) = fs::write(&backup_path, json) {
                 println!("{} {}", "Failed to create backup:".red(), e);
             } else {
-                println!("{} {}", "Backup created:".green().bold(), filename.bright_white());
+                println!("{} {}", "Backup created:".green().bold(), backup_path.display().to_string().bright_white());
+                show_temp_location();
             }
         }
         Err(e) => {
