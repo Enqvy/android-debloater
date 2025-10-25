@@ -1,0 +1,39 @@
+# build stuff
+/target
+/release
+Cargo.lock
+
+# backups from the tool
+backup_*.json
+
+# os junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# editor stuff
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.iml
+.project
+.settings/
+.classpath
+
+# rust
+**/*.rs.bk
+*.pdb
+
+# binaries
+*.exe
+android-debloater
+android-debloater-*
+
+# logs
+*.log
+
+# temp
+*.tmp
+.cache/
