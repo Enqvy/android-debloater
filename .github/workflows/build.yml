@@ -1,0 +1,56 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: macos-intel
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-arm
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+    
+    - name: Build
+      run: cargo build --release --target ${{ matrix.target }}
+    
+    - name: Prepare artifact (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        mkdir -p artifacts
+        cp target/${{ matrix.target }}/release/android-debloater artifacts/android-debloater-${{ matrix.name }}
+    
+    - name: Prepare artifact (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        mkdir artifacts
+        cp target/${{ matrix.target }}/release/android-debloater.exe artifacts/android-debloater-${{ matrix.name }}.exe
+    
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-debloater-${{ matrix.name }}
+        path: artifacts/*
